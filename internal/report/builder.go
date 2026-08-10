@@ -2,6 +2,8 @@ package report
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/TimDelRey/daily-work-log/internal/domain"
@@ -11,8 +13,8 @@ import (
 
 type GitClient interface {
 	CurrentBranch() (string, error)
-	Commits(authorEmail string, start, end time.Time) ([]gitadapter.Commit, error)
-	CommitFiles(hash string) ([]string, error)
+	Branches() ([]string, error)
+	Commits(branch, authorEmail string, start, end time.Time) ([]gitadapter.Commit, error)
 	Stashes() ([]gitadapter.Stash, error)
 	StashFiles(reference string) ([]string, error)
 	StatusFiles() ([]string, error)
@@ -80,24 +82,30 @@ func (b Builder) buildDay(authorEmail string, dateRange domain.DateRange, includ
 		return branch
 	}
 
-	commits, err := b.Git.Commits(authorEmail, dateRange.Start, dateRange.End)
+	gitBranches, err := b.Git.Branches()
 	if err != nil {
-		return domain.Report{}, fmt.Errorf("get commits: %w", err)
+		return domain.Report{}, fmt.Errorf("get branches: %w", err)
 	}
-	for _, source := range commits {
-		paths, err := b.Git.CommitFiles(source.Hash)
+	sortBranchesForCommitOwnership(gitBranches)
+	seenCommits := make(map[string]struct{})
+	for _, gitBranch := range gitBranches {
+		commits, err := b.Git.Commits(gitBranch, authorEmail, dateRange.Start, dateRange.End)
 		if err != nil {
-			return domain.Report{}, fmt.Errorf("get files for commit %s: %w", source.Hash, err)
+			return domain.Report{}, fmt.Errorf("get commits for branch %s: %w", gitBranch, err)
 		}
-
-		commit := domain.Commit{
-			Hash:       source.Hash,
-			Message:    source.Message,
-			AuthoredAt: source.AuthoredAt,
+		for _, source := range commits {
+			if _, seen := seenCommits[source.Hash]; seen {
+				continue
+			}
+			seenCommits[source.Hash] = struct{}{}
+			commit := domain.Commit{
+				Hash:       source.Hash,
+				Message:    source.Message,
+				AuthoredAt: source.AuthoredAt,
+			}
+			branch := getBranch(gitBranch)
+			branch.Commits = append(branch.Commits, commit)
 		}
-		addCommitFiles(&commit, b.includedPaths(paths))
-		branch := getBranch(branchName)
-		branch.Commits = append(branch.Commits, commit)
 	}
 
 	stashes, err := b.Git.Stashes()
@@ -142,6 +150,29 @@ func (b Builder) buildDay(authorEmail string, dateRange domain.DateRange, includ
 	return report, nil
 }
 
+func sortBranchesForCommitOwnership(branches []string) {
+	slices.SortFunc(branches, func(a, b string) int {
+		aBase := isBaseBranch(a)
+		bBase := isBaseBranch(b)
+		if aBase != bBase {
+			if aBase {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a, b)
+	})
+}
+
+func isBaseBranch(branch string) bool {
+	switch branch {
+	case "main", "master", "develop", "development":
+		return true
+	default:
+		return false
+	}
+}
+
 func (b Builder) now() time.Time {
 	if b.Now != nil {
 		return b.Now()
@@ -163,12 +194,6 @@ func (b Builder) includedPaths(paths []string) []string {
 	}
 
 	return included
-}
-
-func addCommitFiles(commit *domain.Commit, paths []string) {
-	for _, path := range paths {
-		commit.AddFile(domain.File{Path: path})
-	}
 }
 
 func addStashFiles(stash *domain.Stash, paths []string) {

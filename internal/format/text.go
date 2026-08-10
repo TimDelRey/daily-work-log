@@ -1,6 +1,7 @@
 package format
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -30,7 +31,7 @@ func (Text) Format(report domain.Report) string {
 }
 
 func formatBranch(branch domain.BranchActivity) string {
-	sections := []string{branch.Name}
+	var sections []string
 
 	if len(branch.Commits) > 0 {
 		commits := append([]domain.Commit(nil), branch.Commits...)
@@ -48,7 +49,6 @@ func formatBranch(branch domain.BranchActivity) string {
 				line += " " + commit.Message
 			}
 			lines = append(lines, line)
-			lines = append(lines, formatFiles(commit.Files)...)
 		}
 		sections = append(sections, strings.Join(lines, "\n"))
 	}
@@ -76,7 +76,14 @@ func formatBranch(branch domain.BranchActivity) string {
 		sections = append(sections, strings.Join(lines, "\n"))
 	}
 
-	return strings.Join(sections, "\n\n")
+	if len(sections) == 0 {
+		return bold(branch.Name)
+	}
+	return bold(branch.Name) + "\n" + strings.Join(sections, "\n\n")
+}
+
+func bold(value string) string {
+	return fmt.Sprintf("\x1b[1m%s\x1b[0m", value)
 }
 
 func formatFiles(files []domain.File) []string {

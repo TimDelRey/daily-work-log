@@ -35,7 +35,20 @@ func (c Client) CurrentBranch() (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-func (c Client) Commits(authorEmail string, start, end time.Time) ([]Commit, error) {
+func (c Client) Branches() ([]string, error) {
+	output, err := c.run("for-each-ref", "--sort=refname", "--format=%(refname:short)", "refs/heads")
+	if err != nil {
+		return nil, err
+	}
+
+	return strings.Fields(string(output)), nil
+}
+
+func (c Client) Commits(branch, authorEmail string, start, end time.Time) ([]Commit, error) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return nil, errors.New("branch is empty")
+	}
 	authorEmail = strings.TrimSpace(authorEmail)
 	if authorEmail == "" {
 		return nil, errors.New("author email is empty")
@@ -52,6 +65,8 @@ func (c Client) Commits(authorEmail string, start, end time.Time) ([]Commit, err
 		"--extended-regexp",
 		"--author="+authorPattern,
 		"--format=%H%x00%aI%x00%s%x00",
+		branch,
+		"--",
 	)
 	if err != nil {
 		return nil, err
@@ -63,19 +78,6 @@ func (c Client) Commits(authorEmail string, start, end time.Time) ([]Commit, err
 	}
 
 	return commits, nil
-}
-
-func (c Client) CommitFiles(hash string) ([]string, error) {
-	if strings.TrimSpace(hash) == "" {
-		return nil, errors.New("commit hash is empty")
-	}
-
-	output, err := c.run("show", "--name-only", "--format=", "-z", hash)
-	if err != nil {
-		return nil, err
-	}
-
-	return parseNULPaths(output), nil
 }
 
 func (c Client) Stashes() ([]Stash, error) {
