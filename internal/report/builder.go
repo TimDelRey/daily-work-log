@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/TimDelRey/daily-work-log/internal/domain"
+	filefilter "github.com/TimDelRey/daily-work-log/internal/filter"
 	gitadapter "github.com/TimDelRey/daily-work-log/internal/git"
 )
 
@@ -17,9 +18,14 @@ type GitClient interface {
 	StatusFiles() ([]string, error)
 }
 
+type FileFilter interface {
+	Include(path string) bool
+}
+
 type Builder struct {
-	Git GitClient
-	Now func() time.Time
+	Git    GitClient
+	Filter FileFilter
+	Now    func() time.Time
 }
 
 func (b Builder) BuildToday(authorEmail string) (domain.Report, error) {
@@ -41,6 +47,7 @@ func (b Builder) BuildStatus() (domain.Report, error) {
 		return domain.Report{}, fmt.Errorf("get current status: %w", err)
 	}
 
+	paths = b.includedPaths(paths)
 	report := domain.Report{}
 	if len(paths) == 0 {
 		return report, nil
@@ -88,7 +95,7 @@ func (b Builder) buildDay(authorEmail string, dateRange domain.DateRange, includ
 			Message:    source.Message,
 			AuthoredAt: source.AuthoredAt,
 		}
-		addCommitFiles(&commit, paths)
+		addCommitFiles(&commit, b.includedPaths(paths))
 		branch := getBranch(branchName)
 		branch.Commits = append(branch.Commits, commit)
 	}
@@ -112,7 +119,7 @@ func (b Builder) buildDay(authorEmail string, dateRange domain.DateRange, includ
 			Message:   source.Message,
 			CreatedAt: source.CreatedAt,
 		}
-		addStashFiles(&stash, paths)
+		addStashFiles(&stash, b.includedPaths(paths))
 		branch := getBranch(source.Branch)
 		branch.Stashes = append(branch.Stashes, stash)
 	}
@@ -122,6 +129,7 @@ func (b Builder) buildDay(authorEmail string, dateRange domain.DateRange, includ
 		if err != nil {
 			return domain.Report{}, fmt.Errorf("get current status: %w", err)
 		}
+		paths = b.includedPaths(paths)
 		if len(paths) > 0 {
 			addCurrentFiles(getBranch(branchName), paths)
 		}
@@ -139,6 +147,22 @@ func (b Builder) now() time.Time {
 		return b.Now()
 	}
 	return time.Now()
+}
+
+func (b Builder) includedPaths(paths []string) []string {
+	matcher := b.Filter
+	if matcher == nil {
+		matcher = filefilter.Default()
+	}
+
+	included := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if matcher.Include(path) {
+			included = append(included, path)
+		}
+	}
+
+	return included
 }
 
 func addCommitFiles(commit *domain.Commit, paths []string) {
