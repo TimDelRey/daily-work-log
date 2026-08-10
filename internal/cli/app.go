@@ -21,10 +21,6 @@ const (
 	commandToday     = "today"
 	commandYesterday = "yesterday"
 	commandStatus    = "status"
-
-	placeholderTodayReport     = "No report data yet. The today report builder will be added in the next stages."
-	placeholderYesterdayReport = "No report data yet. The yesterday report builder will be added in the next stages."
-	placeholderStatusReport    = "No report data yet. The status report builder will be added in the next stages."
 )
 
 var ErrUnknownCommand = errors.New("unknown command")
@@ -45,7 +41,7 @@ func NewApp(out, errOut io.Writer) App {
 	return App{
 		out:     out,
 		errOut:  errOut,
-		builder: placeholderBuilder{},
+		builder: unavailableBuilder{},
 	}
 }
 
@@ -106,16 +102,16 @@ func (a App) printUsage(w io.Writer) {
 	fmt.Fprint(w, usage)
 }
 
-type placeholderBuilder struct{}
+type unavailableBuilder struct{}
 
-func (placeholderBuilder) BuildToday() (string, error) {
-	return placeholderTodayReport, nil
+func (unavailableBuilder) BuildToday() (string, error) {
+	return "", errors.New("report builder is not configured")
 }
 
-func (placeholderBuilder) BuildYesterday() (string, error) {
-	return placeholderYesterdayReport, nil
+func (unavailableBuilder) BuildYesterday() (string, error) {
+	return "", errors.New("report builder is not configured")
 }
 
-func (placeholderBuilder) BuildStatus() (string, error) {
-	return placeholderStatusReport, nil
+func (unavailableBuilder) BuildStatus() (string, error) {
+	return "", errors.New("report builder is not configured")
 }
