@@ -2,6 +2,7 @@ package report
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -13,9 +14,11 @@ import (
 func TestBuildTodayCombinesAllSources(t *testing.T) {
 	now := time.Date(2026, time.July, 16, 15, 0, 0, 0, time.FixedZone("test", 3*60*60))
 	git := &stubGit{
-		branch:      "feature/current",
-		commits:     []gitadapter.Commit{{Hash: "abc123", Message: "own work", AuthoredAt: now.Add(-time.Hour)}},
-		commitFiles: map[string][]string{"abc123": {"shared.go", "commit.go", "shared.go"}},
+		branch:   "feature/current",
+		branches: []string{"feature/current"},
+		commits: map[string][]gitadapter.Commit{
+			"feature/current": {{Hash: "abc123", Message: "own work", AuthoredAt: now.Add(-time.Hour)}},
+		},
 		stashes: []gitadapter.Stash{
 			{Reference: "stash@{0}", Branch: "feature/stashed", Message: "saved", CreatedAt: now.Add(-2 * time.Hour)},
 			{Reference: "stash@{1}", Branch: "feature/old", Message: "old", CreatedAt: now.AddDate(0, 0, -1)},
@@ -40,7 +43,6 @@ func TestBuildTodayCombinesAllSources(t *testing.T) {
 	if current.Name != "feature/current" || len(current.Commits) != 1 {
 		t.Fatalf("current branch = %#v", current)
 	}
-	assertFiles(t, current.Commits[0].Files, []string{"shared.go", "commit.go"})
 	assertFiles(t, current.CurrentlyUncommitted, []string{"working.go"})
 	stashed := report.Branches[1]
 	if stashed.Name != "feature/stashed" || len(stashed.Stashes) != 1 {
@@ -55,7 +57,8 @@ func TestBuildTodayCombinesAllSources(t *testing.T) {
 func TestBuildYesterdayExcludesStatusAndOtherDayStashes(t *testing.T) {
 	now := time.Date(2026, time.July, 16, 9, 0, 0, 0, time.UTC)
 	git := &stubGit{
-		branch: "feature/report",
+		branch:   "feature/report",
+		branches: []string{"feature/report"},
 		stashes: []gitadapter.Stash{
 			{Reference: "stash@{0}", Branch: "feature/report", CreatedAt: time.Date(2026, time.July, 15, 23, 59, 59, 0, time.UTC)},
 			{Reference: "stash@{1}", Branch: "feature/report", CreatedAt: time.Date(2026, time.July, 16, 0, 0, 0, 0, time.UTC)},
@@ -96,7 +99,7 @@ func TestBuildStatusReturnsOnlyCurrentChanges(t *testing.T) {
 }
 
 func TestBuildDayOmitsBranchesWithoutActivity(t *testing.T) {
-	git := &stubGit{branch: "feature/empty"}
+	git := &stubGit{branch: "feature/empty", branches: []string{"feature/empty"}}
 
 	report, err := (Builder{Git: git, Now: func() time.Time { return time.Now() }}).BuildToday("me@example.com")
 	if err != nil {
@@ -107,12 +110,72 @@ func TestBuildDayOmitsBranchesWithoutActivity(t *testing.T) {
 	}
 }
 
-func TestBuilderFiltersFilesFromEverySource(t *testing.T) {
+func TestBuildDayGroupsCommitsAcrossBranchesAndDeduplicatesMergedCommit(t *testing.T) {
+	now := time.Date(2026, time.July, 16, 12, 0, 0, 0, time.UTC)
+	shared := gitadapter.Commit{Hash: "shared", Message: "feature work", AuthoredAt: now}
+	git := &stubGit{
+		branch:   "master",
+		branches: []string{"master", "feature/two", "feature/one"},
+		commits: map[string][]gitadapter.Commit{
+			"master":      {shared, {Hash: "master-only", Message: "release", AuthoredAt: now}},
+			"feature/one": {shared},
+			"feature/two": {{Hash: "second", Message: "other feature", AuthoredAt: now}},
+		},
+	}
+
+	report, err := (Builder{Git: git, Now: func() time.Time { return now }}).BuildYesterday("me@example.com")
+	if err != nil {
+		t.Fatalf("BuildYesterday() returned error: %v", err)
+	}
+
+	if len(report.Branches) != 2 {
+		t.Fatalf("branches = %#v", report.Branches)
+	}
+	if report.Branches[0].Name != "master" || len(report.Branches[0].Commits) != 2 {
+		t.Fatalf("master = %#v", report.Branches[0])
+	}
+	if report.Branches[0].Commits[0].Hash != "shared" || report.Branches[0].Commits[1].Hash != "master-only" {
+		t.Fatalf("master commits = %#v", report.Branches[0].Commits)
+	}
+	if report.Branches[1].Name != "feature/two" || report.Branches[1].Commits[0].Hash != "second" {
+		t.Fatalf("feature/two = %#v", report.Branches[1])
+	}
+}
+
+func TestBuildYesterdayDoesNotDependOnCurrentBranch(t *testing.T) {
 	now := time.Date(2026, time.July, 16, 12, 0, 0, 0, time.UTC)
 	git := &stubGit{
-		branch:      "feature/filter",
-		commits:     []gitadapter.Commit{{Hash: "abc123", AuthoredAt: now}},
-		commitFiles: map[string][]string{"abc123": {"commit.go", "commit.rbi"}},
+		branch:   "master",
+		branches: []string{"master", "feature/work"},
+		commits: map[string][]gitadapter.Commit{
+			"feature/work": {{Hash: "feature", Message: "feature work", AuthoredAt: now}},
+		},
+	}
+	builder := Builder{Git: git, Now: func() time.Time { return now }}
+
+	fromMaster, err := builder.BuildYesterday("me@example.com")
+	if err != nil {
+		t.Fatalf("BuildYesterday() from master returned error: %v", err)
+	}
+	git.branch = "feature/work"
+	fromFeature, err := builder.BuildYesterday("me@example.com")
+	if err != nil {
+		t.Fatalf("BuildYesterday() from feature returned error: %v", err)
+	}
+
+	if !reflect.DeepEqual(fromMaster, fromFeature) {
+		t.Fatalf("reports differ by current branch:\nmaster: %#v\nfeature: %#v", fromMaster, fromFeature)
+	}
+}
+
+func TestBuilderFiltersStashAndCurrentFiles(t *testing.T) {
+	now := time.Date(2026, time.July, 16, 12, 0, 0, 0, time.UTC)
+	git := &stubGit{
+		branch:   "feature/filter",
+		branches: []string{"feature/filter"},
+		commits: map[string][]gitadapter.Commit{
+			"feature/filter": {{Hash: "abc123", AuthoredAt: now}},
+		},
 		stashes: []gitadapter.Stash{
 			{Reference: "stash@{0}", Branch: "feature/filter", CreatedAt: now},
 		},
@@ -128,7 +191,6 @@ func TestBuilderFiltersFilesFromEverySource(t *testing.T) {
 	}
 
 	branch := report.Branches[0]
-	assertFiles(t, branch.Commits[0].Files, []string{"commit.go"})
 	assertFiles(t, branch.Stashes[0].Files, []string{"stash.go"})
 	assertFiles(t, branch.CurrentlyUncommitted, []string{"working.go"})
 }
@@ -147,7 +209,7 @@ func TestBuildStatusOmitsBranchWhenAllFilesAreIgnored(t *testing.T) {
 
 func TestBuildDayWrapsSourceErrors(t *testing.T) {
 	sourceErr := errors.New("git failed")
-	git := &stubGit{branch: "main", commitsErr: sourceErr}
+	git := &stubGit{branch: "main", branches: []string{"main"}, commitsErr: sourceErr}
 
 	_, err := (Builder{Git: git, Now: time.Now}).BuildToday("me@example.com")
 	if !errors.Is(err, sourceErr) {
@@ -157,8 +219,8 @@ func TestBuildDayWrapsSourceErrors(t *testing.T) {
 
 type stubGit struct {
 	branch           string
-	commits          []gitadapter.Commit
-	commitFiles      map[string][]string
+	branches         []string
+	commits          map[string][]gitadapter.Commit
 	stashes          []gitadapter.Stash
 	stashFiles       map[string][]string
 	statusFiles      []string
@@ -171,12 +233,12 @@ type stubGit struct {
 }
 
 func (g *stubGit) CurrentBranch() (string, error) { return g.branch, nil }
-func (g *stubGit) Commits(authorEmail string, _, _ time.Time) ([]gitadapter.Commit, error) {
+func (g *stubGit) Branches() ([]string, error)    { return g.branches, nil }
+func (g *stubGit) Commits(branch, authorEmail string, _, _ time.Time) ([]gitadapter.Commit, error) {
 	g.commitCalls++
 	g.authorEmail = authorEmail
-	return g.commits, g.commitsErr
+	return g.commits[branch], g.commitsErr
 }
-func (g *stubGit) CommitFiles(hash string) ([]string, error) { return g.commitFiles[hash], nil }
 func (g *stubGit) Stashes() ([]gitadapter.Stash, error) {
 	g.stashCalls++
 	return g.stashes, nil

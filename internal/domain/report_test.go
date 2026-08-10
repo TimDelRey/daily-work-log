@@ -2,16 +2,6 @@ package domain
 
 import "testing"
 
-func TestCommitAddFileDeduplicatesPaths(t *testing.T) {
-	commit := Commit{}
-
-	commit.AddFile(File{Path: "internal/domain/report.go"})
-	commit.AddFile(File{Path: "internal/domain/report.go"})
-	commit.AddFile(File{Path: "README.md"})
-
-	assertFilePaths(t, commit.Files, []string{"internal/domain/report.go", "README.md"})
-}
-
 func TestStashAddFileDeduplicatesPaths(t *testing.T) {
 	stash := Stash{}
 
@@ -31,16 +21,16 @@ func TestBranchAddCurrentlyUncommittedDeduplicatesPaths(t *testing.T) {
 	assertFilePaths(t, branch.CurrentlyUncommitted, []string{"internal/domain/report.go", "go.mod"})
 }
 
-func TestFilesAreDeduplicatedOnlyWithinTheirLogicalGroup(t *testing.T) {
+func TestFilesAreDeduplicatedOnlyWithinTheirSource(t *testing.T) {
 	file := File{Path: "shared.go"}
-	commit := Commit{}
 	stash := Stash{}
+	branch := BranchActivity{}
 
-	commit.AddFile(file)
 	stash.AddFile(file)
+	branch.AddCurrentlyUncommitted(file)
 
-	assertFilePaths(t, commit.Files, []string{"shared.go"})
 	assertFilePaths(t, stash.Files, []string{"shared.go"})
+	assertFilePaths(t, branch.CurrentlyUncommitted, []string{"shared.go"})
 }
 
 func assertFilePaths(t *testing.T, files []File, want []string) {

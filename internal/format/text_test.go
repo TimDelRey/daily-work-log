@@ -16,7 +16,7 @@ func TestTextFormat(t *testing.T) {
 		{
 			Name: "feature/report",
 			Commits: []domain.Commit{
-				{Hash: "bbbbbbb222", Message: "second", AuthoredAt: at("10:42"), Files: []domain.File{{Path: "z.go"}, {Path: "a.go"}, {Path: "a.go"}}},
+				{Hash: "bbbbbbb222", Message: "second", AuthoredAt: at("10:42")},
 				{Hash: "aaaaaaa111", Message: "first", AuthoredAt: at("09:15")},
 			},
 			Stashes: []domain.Stash{
@@ -26,13 +26,10 @@ func TestTextFormat(t *testing.T) {
 		},
 	}}
 
-	want := `feature/report
-
+	want := "\x1b[1mfeature/report\x1b[0m" + `
 Commits:
   09:15 aaaaaaa first
   10:42 bbbbbbb second
-    a.go
-    z.go
 
 Stashes:
   14:20 stash@{0}
@@ -41,8 +38,7 @@ Stashes:
 Currently uncommitted:
     working.go
 
-feature/z-last
-
+` + "\x1b[1mfeature/z-last\x1b[0m" + `
 Currently uncommitted:
     z.go`
 

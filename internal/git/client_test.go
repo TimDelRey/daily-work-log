@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 )
@@ -23,6 +22,20 @@ func TestClientCurrentBranch(t *testing.T) {
 	}
 }
 
+func TestClientBranchesReturnsLocalBranches(t *testing.T) {
+	repository := initRepository(t)
+	writeFile(t, repository, "initial.txt", "initial")
+	commit(t, repository, "Worklog User", "developer@example.com", "2026-07-16T08:00:00Z", "initial")
+	runGit(t, repository, "branch", "feature/two")
+	runGit(t, repository, "branch", "feature/one")
+
+	branches, err := (Client{Directory: repository}).Branches()
+	if err != nil {
+		t.Fatalf("Branches() вернул ошибку: %v", err)
+	}
+	assertPaths(t, branches, []string{"master", "feature/one", "feature/two"})
+}
+
 func TestClientCommitsFiltersAuthorAndDateRange(t *testing.T) {
 	repository := initRepository(t)
 	writeFile(t, repository, "before.txt", "before")
@@ -38,7 +51,7 @@ func TestClientCommitsFiltersAuthorAndDateRange(t *testing.T) {
 	start := time.Date(2026, time.July, 16, 0, 0, 0, 0, location)
 	end := start.AddDate(0, 0, 1)
 
-	commits, err := (Client{Directory: repository}).Commits("developer+worklog@example.com", start, end)
+	commits, err := (Client{Directory: repository}).Commits("master", "developer+worklog@example.com", start, end)
 	if err != nil {
 		t.Fatalf("Commits() вернул ошибку: %v", err)
 	}
@@ -51,22 +64,6 @@ func TestClientCommitsFiltersAuthorAndDateRange(t *testing.T) {
 	if commits[0].AuthoredAt.Format(time.RFC3339) != "2026-07-16T10:00:00+03:00" {
 		t.Errorf("AuthoredAt = %s", commits[0].AuthoredAt.Format(time.RFC3339))
 	}
-}
-
-func TestClientCommitFilesPreservesUnusualPaths(t *testing.T) {
-	repository := initRepository(t)
-	paths := []string{"directory/file with spaces.txt", "line\nbreak.txt"}
-	for _, path := range paths {
-		writeFile(t, repository, path, path)
-	}
-	commit(t, repository, "Worklog User", "developer@example.com", "2026-07-16T10:00:00Z", "add files")
-	hash := strings.TrimSpace(runGit(t, repository, "rev-parse", "HEAD"))
-
-	files, err := (Client{Directory: repository}).CommitFiles(hash)
-	if err != nil {
-		t.Fatalf("CommitFiles() вернул ошибку: %v", err)
-	}
-	assertPaths(t, files, paths)
 }
 
 func TestClientStashesAndFiles(t *testing.T) {
