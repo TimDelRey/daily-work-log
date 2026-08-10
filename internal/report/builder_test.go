@@ -107,6 +107,44 @@ func TestBuildDayOmitsBranchesWithoutActivity(t *testing.T) {
 	}
 }
 
+func TestBuilderFiltersFilesFromEverySource(t *testing.T) {
+	now := time.Date(2026, time.July, 16, 12, 0, 0, 0, time.UTC)
+	git := &stubGit{
+		branch:      "feature/filter",
+		commits:     []gitadapter.Commit{{Hash: "abc123", AuthoredAt: now}},
+		commitFiles: map[string][]string{"abc123": {"commit.go", "commit.rbi"}},
+		stashes: []gitadapter.Stash{
+			{Reference: "stash@{0}", Branch: "feature/filter", CreatedAt: now},
+		},
+		stashFiles: map[string][]string{
+			"stash@{0}": {"stash.go", "sorbet/rbi/generated.rb"},
+		},
+		statusFiles: []string{"working.go", "working.rbi"},
+	}
+
+	report, err := (Builder{Git: git, Now: func() time.Time { return now }}).BuildToday("me@example.com")
+	if err != nil {
+		t.Fatalf("BuildToday() returned error: %v", err)
+	}
+
+	branch := report.Branches[0]
+	assertFiles(t, branch.Commits[0].Files, []string{"commit.go"})
+	assertFiles(t, branch.Stashes[0].Files, []string{"stash.go"})
+	assertFiles(t, branch.CurrentlyUncommitted, []string{"working.go"})
+}
+
+func TestBuildStatusOmitsBranchWhenAllFilesAreIgnored(t *testing.T) {
+	git := &stubGit{branch: "feature/generated", statusFiles: []string{"types.rbi", "sorbet/rbi/cache.rb"}}
+
+	report, err := (Builder{Git: git}).BuildStatus()
+	if err != nil {
+		t.Fatalf("BuildStatus() returned error: %v", err)
+	}
+	if len(report.Branches) != 0 {
+		t.Fatalf("branches = %#v", report.Branches)
+	}
+}
+
 func TestBuildDayWrapsSourceErrors(t *testing.T) {
 	sourceErr := errors.New("git failed")
 	git := &stubGit{branch: "main", commitsErr: sourceErr}
