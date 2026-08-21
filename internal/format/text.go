@@ -33,7 +33,9 @@ func (Text) Format(report domain.Report) string {
 func formatBranch(branch domain.BranchActivity) string {
 	var sections []string
 
-	if len(branch.Commits) > 0 {
+	if len(branch.Actions) > 0 {
+		sections = append(sections, formatActions(branch.Actions))
+	} else if len(branch.Commits) > 0 {
 		commits := append([]domain.Commit(nil), branch.Commits...)
 		sort.SliceStable(commits, func(i, j int) bool {
 			if commits[i].AuthoredAt.Equal(commits[j].AuthoredAt) {
@@ -53,7 +55,7 @@ func formatBranch(branch domain.BranchActivity) string {
 		sections = append(sections, strings.Join(lines, "\n"))
 	}
 
-	if len(branch.Stashes) > 0 {
+	if len(branch.Actions) == 0 && len(branch.Stashes) > 0 {
 		stashes := append([]domain.Stash(nil), branch.Stashes...)
 		sort.SliceStable(stashes, func(i, j int) bool {
 			if stashes[i].CreatedAt.Equal(stashes[j].CreatedAt) {
@@ -76,10 +78,49 @@ func formatBranch(branch domain.BranchActivity) string {
 		sections = append(sections, strings.Join(lines, "\n"))
 	}
 
+	if branch.SyncState != nil {
+		sections = append(sections, formatSyncState(branch.Upstream, *branch.SyncState))
+	}
+
 	if len(sections) == 0 {
 		return bold(branch.Name)
 	}
 	return bold(branch.Name) + "\n" + strings.Join(sections, "\n\n")
+}
+
+func formatActions(actions []domain.Action) string {
+	ordered := append([]domain.Action(nil), actions...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].OccurredAt.Equal(ordered[j].OccurredAt) {
+			return ordered[i].Type < ordered[j].Type
+		}
+		return ordered[i].OccurredAt.Before(ordered[j].OccurredAt)
+	})
+	lines := make([]string, 0, len(ordered))
+	for _, action := range ordered {
+		line := fmt.Sprintf("  %s %-12s", action.OccurredAt.Format("15:04"), action.Type)
+		if action.Summary != "" {
+			line += " " + action.Summary
+		}
+		lines = append(lines, strings.TrimRight(line, " "))
+		lines = append(lines, formatFiles(action.Files)...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatSyncState(upstream string, state domain.SyncState) string {
+	switch {
+	case state.Synchronized:
+		return "synchronized with " + upstream
+	case state.Ahead > 0 && state.Behind > 0:
+		return fmt.Sprintf("ahead %d, behind %d of %s", state.Ahead, state.Behind, upstream)
+	case state.Ahead > 0:
+		return fmt.Sprintf("ahead %d of %s", state.Ahead, upstream)
+	case state.Behind > 0:
+		return fmt.Sprintf("behind %d of %s", state.Behind, upstream)
+	default:
+		return "upstream state unknown"
+	}
 }
 
 func bold(value string) string {

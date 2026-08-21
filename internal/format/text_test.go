@@ -53,6 +53,30 @@ func TestTextFormatEmptyReport(t *testing.T) {
 	}
 }
 
+func TestTextFormatActionsAndUpstreamState(t *testing.T) {
+	report := domain.Report{Branches: []domain.BranchActivity{{
+		Name:     "feature/actions",
+		Upstream: "origin/feature/actions",
+		Actions: []domain.Action{
+			{Type: domain.ActionPush, OccurredAt: at("10:30")},
+			{Type: domain.ActionCommit, OccurredAt: at("09:15"), Summary: "add activity model"},
+			{Type: domain.ActionStash, OccurredAt: at("11:00"), Summary: "work in progress", Files: []domain.File{{Path: "internal/activity/classifier.go"}}},
+		},
+		SyncState: &domain.SyncState{Synchronized: true},
+	}}}
+
+	want := "\x1b[1mfeature/actions\x1b[0m" + `
+  09:15 commit       add activity model
+  10:30 push
+  11:00 stash        work in progress
+    internal/activity/classifier.go
+
+synchronized with origin/feature/actions`
+	if got := (Text{}).Format(report); got != want {
+		t.Fatalf("Format() =\n%s\n\nwant:\n%s", got, want)
+	}
+}
+
 func TestTextFormatDoesNotMutateReport(t *testing.T) {
 	report := domain.Report{Branches: []domain.BranchActivity{
 		{Name: "z"},

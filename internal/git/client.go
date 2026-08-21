@@ -22,6 +22,29 @@ type Stash struct {
 	CreatedAt time.Time
 }
 
+type ReflogEntry struct {
+	Ref        string
+	Selector   string
+	OldOID     string
+	NewOID     string
+	OccurredAt time.Time
+	Subject    string
+}
+
+type BranchRef struct {
+	Name     string
+	FullName string
+	Upstream string
+}
+
+type UpstreamState struct {
+	Branch   string
+	Upstream string
+	Ahead    int
+	Behind   int
+	Known    bool
+}
+
 type Client struct {
 	Directory string
 }
@@ -42,6 +65,131 @@ func (c Client) Branches() ([]string, error) {
 	}
 
 	return strings.Fields(string(output)), nil
+}
+
+func (c Client) BranchRefs() ([]BranchRef, error) {
+	output, err := c.run(
+		"for-each-ref", "--sort=refname",
+		"--format=%(refname:short)%00%(refname)%00%(upstream:short)%00",
+		"refs/heads",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	refs, err := parseBranchRefs(output)
+	if err != nil {
+		return nil, fmt.Errorf("parse local branch refs: %w", err)
+	}
+	return refs, nil
+}
+
+func (c Client) RemoteRefs() ([]BranchRef, error) {
+	output, err := c.run(
+		"for-each-ref", "--sort=refname",
+		"--format=%(refname:short)%00%(refname)%00%00",
+		"refs/remotes",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	refs, err := parseBranchRefs(output)
+	if err != nil {
+		return nil, fmt.Errorf("parse remote refs: %w", err)
+	}
+	return refs, nil
+}
+
+func (c Client) Reflog(reference string) ([]ReflogEntry, error) {
+	reference = strings.TrimSpace(reference)
+	if reference == "" {
+		return nil, errors.New("reflog reference is empty")
+	}
+
+	output, err := c.run(
+		"reflog", "show", "--date=iso-strict",
+		"--format=%H%x00%gD%x00%gD%x00%gs%x00", reference,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := parseReflog(reference, output)
+	if err != nil {
+		return nil, fmt.Errorf("parse reflog for %s: %w", reference, err)
+	}
+	return entries, nil
+}
+
+func (c Client) UpstreamState(branch, upstream string) (UpstreamState, error) {
+	branch = strings.TrimSpace(branch)
+	upstream = strings.TrimSpace(upstream)
+	if branch == "" {
+		return UpstreamState{}, errors.New("branch is empty")
+	}
+	if upstream == "" {
+		return UpstreamState{}, errors.New("upstream is empty")
+	}
+	state := UpstreamState{Branch: branch, Upstream: upstream}
+	for _, reference := range []string{branch, upstream} {
+		exists, err := c.commitExists(reference)
+		if err != nil {
+			return UpstreamState{}, err
+		}
+		if !exists {
+			return state, nil
+		}
+	}
+
+	output, err := c.run("rev-list", "--left-right", "--count", branch+"..."+upstream)
+	if err != nil {
+		return UpstreamState{}, err
+	}
+
+	ahead, behind, err := parseAheadBehind(output)
+	if err != nil {
+		return UpstreamState{}, fmt.Errorf("parse upstream state: %w", err)
+	}
+	state.Ahead = ahead
+	state.Behind = behind
+	state.Known = true
+	return state, nil
+}
+
+func (c Client) commitExists(reference string) (bool, error) {
+	command := exec.Command("git", "rev-parse", "--verify", "--quiet", reference+"^{commit}")
+	command.Dir = c.Directory
+	output, err := command.CombinedOutput()
+	if err == nil {
+		return true, nil
+	}
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("resolve commit %s: %w: %s", reference, err, strings.TrimSpace(string(output)))
+}
+
+func (c Client) IsAncestor(olderOID, newerOID string) (bool, error) {
+	olderOID = strings.TrimSpace(olderOID)
+	newerOID = strings.TrimSpace(newerOID)
+	if olderOID == "" || newerOID == "" {
+		return false, errors.New("both object IDs are required")
+	}
+
+	command := exec.Command("git", "merge-base", "--is-ancestor", olderOID, newerOID)
+	command.Dir = c.Directory
+	output, err := command.CombinedOutput()
+	if err == nil {
+		return true, nil
+	}
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("check whether %s is ancestor of %s: %w: %s",
+		olderOID, newerOID, err, strings.TrimSpace(string(output)))
 }
 
 func (c Client) Commits(branch, authorEmail string, start, end time.Time) ([]Commit, error) {

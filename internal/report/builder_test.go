@@ -98,6 +98,30 @@ func TestBuildStatusReturnsOnlyCurrentChanges(t *testing.T) {
 	}
 }
 
+func TestBuildStatusIncludesCurrentBranchWhenWorkingTreeIsClean(t *testing.T) {
+	git := &stubGit{branch: "feature/clean"}
+
+	report, err := (Builder{Git: git}).BuildStatus()
+	if err != nil {
+		t.Fatalf("BuildStatus() returned error: %v", err)
+	}
+	if len(report.Branches) != 1 || report.Branches[0].Name != "feature/clean" {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestBuildStatusGroupsDetachedWorkingTreeAsUnknown(t *testing.T) {
+	git := &stubGit{statusFiles: []string{"detached.go"}}
+
+	report, err := (Builder{Git: git}).BuildStatus()
+	if err != nil {
+		t.Fatalf("BuildStatus() returned error: %v", err)
+	}
+	if len(report.Branches) != 1 || report.Branches[0].Name != "detached/unknown" {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
 func TestBuildDayOmitsBranchesWithoutActivity(t *testing.T) {
 	git := &stubGit{branch: "feature/empty", branches: []string{"feature/empty"}}
 
@@ -195,15 +219,18 @@ func TestBuilderFiltersStashAndCurrentFiles(t *testing.T) {
 	assertFiles(t, branch.CurrentlyUncommitted, []string{"working.go"})
 }
 
-func TestBuildStatusOmitsBranchWhenAllFilesAreIgnored(t *testing.T) {
+func TestBuildStatusKeepsCurrentBranchWhenAllFilesAreIgnored(t *testing.T) {
 	git := &stubGit{branch: "feature/generated", statusFiles: []string{"types.rbi", "sorbet/rbi/cache.rb"}}
 
 	report, err := (Builder{Git: git}).BuildStatus()
 	if err != nil {
 		t.Fatalf("BuildStatus() returned error: %v", err)
 	}
-	if len(report.Branches) != 0 {
+	if len(report.Branches) != 1 || report.Branches[0].Name != "feature/generated" {
 		t.Fatalf("branches = %#v", report.Branches)
+	}
+	if len(report.Branches[0].CurrentlyUncommitted) != 0 {
+		t.Fatalf("current files = %#v", report.Branches[0].CurrentlyUncommitted)
 	}
 }
 
