@@ -3,7 +3,51 @@ package git
 import (
 	"slices"
 	"testing"
+	"time"
 )
+
+func TestParseBranchRefs(t *testing.T) {
+	output := []byte("feature/one\x00refs/heads/feature/one\x00origin/feature/one\x00\nmaster\x00refs/heads/master\x00\x00\n")
+
+	refs, err := parseBranchRefs(output)
+	if err != nil {
+		t.Fatalf("parseBranchRefs() вернул ошибку: %v", err)
+	}
+	if len(refs) != 2 || refs[0].Upstream != "origin/feature/one" || refs[1].Name != "master" {
+		t.Fatalf("parseBranchRefs() = %#v", refs)
+	}
+}
+
+func TestParseReflogDerivesOldOIDFromPreviousEntry(t *testing.T) {
+	output := []byte("new\x00origin/main@{2026-07-16T12:00:00+03:00}\x00origin/main@{2026-07-16T12:00:00+03:00}\x00update by push\x00\nold\x00origin/main@{2026-07-16T11:00:00+03:00}\x00origin/main@{2026-07-16T11:00:00+03:00}\x00fetch origin: fast-forward\x00\n")
+
+	entries, err := parseReflog("refs/remotes/origin/main", output)
+	if err != nil {
+		t.Fatalf("parseReflog() вернул ошибку: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("parseReflog() вернул %d записей: %#v", len(entries), entries)
+	}
+	if entries[0].OldOID != "old" || entries[0].NewOID != "new" || entries[0].Subject != "update by push" {
+		t.Fatalf("первая запись = %#v", entries[0])
+	}
+	if entries[0].OccurredAt.Format(time.RFC3339) != "2026-07-16T12:00:00+03:00" {
+		t.Fatalf("OccurredAt = %s", entries[0].OccurredAt.Format(time.RFC3339))
+	}
+	if entries[1].OldOID != "" {
+		t.Fatalf("OldOID самой старой доступной записи = %q", entries[1].OldOID)
+	}
+}
+
+func TestParseAheadBehind(t *testing.T) {
+	ahead, behind, err := parseAheadBehind([]byte("2\t3\n"))
+	if err != nil {
+		t.Fatalf("parseAheadBehind() вернул ошибку: %v", err)
+	}
+	if ahead != 2 || behind != 3 {
+		t.Fatalf("parseAheadBehind() = (%d, %d), ожидалось (2, 3)", ahead, behind)
+	}
+}
 
 func TestParseStatus(t *testing.T) {
 	output := []byte(" M file with spaces.txt\x00R  renamed.txt\x00original.txt\x00?? line\nbreak.txt\x00")

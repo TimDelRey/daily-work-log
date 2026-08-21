@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -34,6 +35,88 @@ func TestClientBranchesReturnsLocalBranches(t *testing.T) {
 		t.Fatalf("Branches() вернул ошибку: %v", err)
 	}
 	assertPaths(t, branches, []string{"master", "feature/one", "feature/two"})
+}
+
+func TestClientBranchRefsAndUpstreamState(t *testing.T) {
+	remote := initBareRepository(t)
+	repository := initRepository(t)
+	writeFile(t, repository, "initial.txt", "initial")
+	commit(t, repository, "Worklog User", "developer@example.com", "2026-07-16T08:00:00Z", "initial")
+	runGit(t, repository, "remote", "add", "origin", remote)
+	runGit(t, repository, "push", "-q", "-u", "origin", "master")
+	writeFile(t, repository, "ahead.txt", "ahead")
+	commit(t, repository, "Worklog User", "developer@example.com", "2026-07-16T09:00:00Z", "ahead")
+
+	client := Client{Directory: repository}
+	refs, err := client.BranchRefs()
+	if err != nil {
+		t.Fatalf("BranchRefs() вернул ошибку: %v", err)
+	}
+	if len(refs) != 1 || refs[0].FullName != "refs/heads/master" || refs[0].Upstream != "origin/master" {
+		t.Fatalf("BranchRefs() = %#v", refs)
+	}
+
+	state, err := client.UpstreamState("master", "origin/master")
+	if err != nil {
+		t.Fatalf("UpstreamState() вернул ошибку: %v", err)
+	}
+	if state.Ahead != 1 || state.Behind != 0 {
+		t.Fatalf("UpstreamState() = %#v", state)
+	}
+	if !state.Known {
+		t.Fatalf("UpstreamState() помечен как неизвестный: %#v", state)
+	}
+}
+
+func TestClientUpstreamStateIsUnknownWhenRemoteTrackingRefIsMissing(t *testing.T) {
+	repository := initRepository(t)
+	writeFile(t, repository, "initial.txt", "initial")
+	commit(t, repository, "Worklog User", "developer@example.com", "2026-07-16T08:00:00Z", "initial")
+
+	state, err := (Client{Directory: repository}).UpstreamState("master", "origin/deleted")
+	if err != nil {
+		t.Fatalf("UpstreamState() вернул ошибку: %v", err)
+	}
+	if state.Known || state.Branch != "master" || state.Upstream != "origin/deleted" {
+		t.Fatalf("UpstreamState() = %#v", state)
+	}
+}
+
+func TestClientReflogDistinguishesPushFromFetchAndExposesForceUpdateOIDs(t *testing.T) {
+	remote := initBareRepository(t)
+	repository := initRepository(t)
+	writeFile(t, repository, "initial.txt", "initial")
+	commit(t, repository, "Worklog User", "developer@example.com", "2026-07-16T08:00:00Z", "initial")
+	runGit(t, repository, "remote", "add", "origin", remote)
+	runGit(t, repository, "push", "-q", "-u", "origin", "master")
+
+	writeFile(t, repository, "pushed.txt", "pushed")
+	commit(t, repository, "Worklog User", "developer@example.com", "2026-07-16T09:00:00Z", "pushed")
+	runGit(t, repository, "push", "-q", "origin", "master")
+	pushedOID := strings.TrimSpace(runGit(t, repository, "rev-parse", "HEAD"))
+
+	runGit(t, repository, "reset", "-q", "--hard", "HEAD~1")
+	writeFile(t, repository, "rewritten.txt", "rewritten")
+	commit(t, repository, "Worklog User", "developer@example.com", "2026-07-16T10:00:00Z", "rewritten")
+	forcedOID := strings.TrimSpace(runGit(t, repository, "rev-parse", "HEAD"))
+	runGit(t, repository, "push", "-q", "--force", "origin", "master")
+
+	client := Client{Directory: repository}
+	entries, err := client.Reflog("refs/remotes/origin/master")
+	if err != nil {
+		t.Fatalf("Reflog() вернул ошибку: %v", err)
+	}
+	if len(entries) < 3 {
+		t.Fatalf("Reflog() вернул %d записей: %#v", len(entries), entries)
+	}
+	if entries[0].Subject != "update by push" || entries[0].OldOID != pushedOID || entries[0].NewOID != forcedOID {
+		t.Fatalf("force-push запись = %#v", entries[0])
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Subject, "fetch ") {
+			t.Fatalf("локальный push ошибочно представлен как fetch: %#v", entry)
+		}
+	}
 }
 
 func TestClientCommitsFiltersAuthorAndDateRange(t *testing.T) {
@@ -125,6 +208,13 @@ func initRepository(t *testing.T) string {
 	runGit(t, repository, "config", "user.name", "Worklog User")
 	runGit(t, repository, "config", "user.email", "developer@example.com")
 
+	return repository
+}
+
+func initBareRepository(t *testing.T) string {
+	t.Helper()
+	repository := t.TempDir()
+	runGit(t, repository, "init", "-q", "--bare")
 	return repository
 }
 

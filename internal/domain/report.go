@@ -9,9 +9,57 @@ type Report struct {
 
 type BranchActivity struct {
 	Name                 string
+	Upstream             string
+	Actions              []Action
+	SyncState            *SyncState
 	Commits              []Commit
 	Stashes              []Stash
 	CurrentlyUncommitted []File
+}
+
+type ActionType string
+
+const (
+	ActionCommit     ActionType = "commit"
+	ActionRebase     ActionType = "rebase"
+	ActionMerge      ActionType = "merge"
+	ActionCherryPick ActionType = "cherry_pick"
+	ActionRevert     ActionType = "revert"
+	ActionPush       ActionType = "push"
+	ActionForcePush  ActionType = "force_push"
+	ActionStash      ActionType = "stash"
+)
+
+type ActionSource string
+
+const (
+	SourceCommitLog ActionSource = "commit_log"
+	SourceReflog    ActionSource = "reflog"
+	SourceStashLog  ActionSource = "stash_log"
+)
+
+type Confidence string
+
+const (
+	ConfidenceExact        Confidence = "exact"
+	ConfidenceInferred     Confidence = "inferred"
+	ConfidenceCurrentState Confidence = "current_state"
+)
+
+type Action struct {
+	Type       ActionType
+	OccurredAt time.Time
+	Summary    string
+	CommitHash string
+	Source     ActionSource
+	Confidence Confidence
+	Files      []File
+}
+
+type SyncState struct {
+	Ahead        int
+	Behind       int
+	Synchronized bool
 }
 
 type Commit struct {
